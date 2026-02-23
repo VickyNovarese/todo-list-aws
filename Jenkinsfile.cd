@@ -1,0 +1,82 @@
+pipeline {
+  agent any
+  options { timestamps(); disableConcurrentBuilds() }
+
+  parameters {
+    choice(name: 'DEPLOY_STAGE', choices: ['default','staging','production'], description: 'SAM parameter Stage')
+    string(name: 'STACK_NAME', defaultValue: 'todo-list-aws', description: 'CloudFormation/SAM stack name')
+    string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS Region')
+  }
+
+  environment {
+    AWS_DEFAULT_REGION = "${params.AWS_REGION}"
+  }
+
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+
+    stage('Only master') {
+      when { not { branch 'master' } }
+      steps {
+        echo "CD runs only on master. Skipping..."
+        script { currentBuild.result = 'NOT_BUILT' }
+      }
+    }
+
+    stage('SAM Build') {
+      when { branch 'master' }
+      steps {
+        sh '''
+          set -e
+          sam --version
+          aws --version
+          sam build
+        '''
+      }
+    }
+
+    stage('SAM Deploy') {
+      when { branch 'master' }
+      steps {
+        sh '''
+          set -e
+          sam deploy \
+            --stack-name "${STACK_NAME}" \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --parameter-overrides Stage="${DEPLOY_STAGE}" \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+        '''
+      }
+    }
+
+    stage('Smoke Tests (Deployed API)') {
+      when { branch 'master' }
+      steps {
+        sh '''
+          set -e
+
+          BASE_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+            --output text)
+
+          if [ -z "$BASE_URL" ] || [ "$BASE_URL" = "None" ]; then
+            echo "ERROR: BaseUrlApi output not found in stack outputs."
+            exit 1
+          fi
+
+          echo "Base URL: $BASE_URL"
+
+          # basic health: list todos
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/todos" || true)
+          echo "GET /todos => $CODE"
+          test "$CODE" = "200"
+        '''
+      }
+    }
+  }
+}
+
+

@@ -1,0 +1,73 @@
+pipeline {
+  agent any
+  options { timestamps(); disableConcurrentBuilds() }
+
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+
+    stage('Only develop') {
+      when { not { branch 'develop' } }
+      steps {
+        echo "CI runs only on develop. Skipping..."
+        script { currentBuild.result = 'NOT_BUILT' }
+      }
+    }
+
+    stage('Setup Python') {
+      when { branch 'develop' }
+      steps {
+        sh '''
+          set -e
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -U pip
+          [ -f requirements.txt ] && pip install -r requirements.txt || true
+          pip install flake8 pytest coverage bandit
+        '''
+      }
+    }
+
+    stage('Static (flake8)') {
+      when { branch 'develop' }
+      steps {
+        sh '''
+          set -e
+          . .venv/bin/activate
+          python -m flake8 app
+        '''
+      }
+    }
+
+    stage('Unit Tests + Coverage') {
+      when { branch 'develop' }
+      steps {
+        sh '''
+          set -e
+          . .venv/bin/activate
+          export PYTHONPATH=.
+          python -m coverage run --branch --source=app --omit=app/__init__.py \
+            -m pytest --junitxml=result-unit.xml test/unit
+          python -m coverage xml -o coverage.xml
+        '''
+      }
+      post {
+        always {
+          junit testResults: 'result-unit.xml', allowEmptyResults: true
+          archiveArtifacts artifacts: 'coverage.xml', allowEmptyArchive: true
+        }
+      }
+    }
+
+    stage('Security (bandit)') {
+      when { branch 'develop' }
+      steps {
+        sh '''
+          set -e
+          . .venv/bin/activate
+          bandit -r . -x .venv -f txt -o bandit.txt || true
+        '''
+      }
+      post { always { archiveArtifacts artifacts: 'bandit.txt', allowEmptyArchive: true } }
+    }
+  }
+}
