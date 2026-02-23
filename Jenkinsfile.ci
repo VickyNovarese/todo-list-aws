@@ -59,7 +59,7 @@ pipeline {
     }
 
     stage('Security (bandit)') {
-      when { branch 'develop' }
+     
       steps {
         sh '''
           set -e
@@ -68,6 +68,6 @@ pipeline {
         '''
       }
       post { always { archiveArtifacts artifacts: 'bandit.txt', allowEmptyArchive: true } }
-    }
+    
   }
 }
