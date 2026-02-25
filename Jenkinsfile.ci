@@ -7,6 +7,7 @@ pipeline {
 
     stage('Only develop') {
       when { not { branch 'develop' } }
+
       steps {
         echo "CI runs only on develop. Skipping..."
         script { currentBuild.result = 'NOT_BUILT' }
@@ -70,4 +71,6 @@ pipeline {
       post { always { archiveArtifacts artifacts: 'bandit.txt', allowEmptyArchive: true } }
     
   }
+}
+
 }
