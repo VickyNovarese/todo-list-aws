@@ -1,151 +1,132 @@
 pipeline {
-  agent any
-
-  options {
-    timestamps()
-    skipDefaultCheckout(true)
-  }
-
-  environment {
-    AWS_DEFAULT_REGION = "us-east-1"
-    CONFIG_ENV = "staging"
-    STACK_NAME = "todo-list-aws-staging"   // debe coincidir con samconfig.toml staging
-  }
-
-  stages {
-
-    stage('Get Code') {
-      steps {
-        // Asumiendo que el job está configurado para apuntar al repo
-        checkout scm
-        sh 'git rev-parse --abbrev-ref HEAD'
-      }
+    agent any
+    options {
+        timestamps()
+        skipDefaultCheckout(true)
     }
 
-    stage('Static Test') {
-  steps {
-    sh '''
-      set -e
-      python3 -m venv .venv
-      . .venv/bin/activate
-      python -m pip install -U pip
-      pip install flake8 "bandit[sarif]"
-
-      
-      python -m flake8 --format=pylint src > flake8.out || true
-    
-      test -f flake8.out || touch flake8.out
-
-      # Bandit SOLO src
-      python -m bandit --exit-zero -r src -f sarif -o bandit.sarif
-    '''
-
-    recordIssues(tools: [flake8(pattern: 'flake8.out')], sourceCodeRetention: 'LAST_BUILD')
-    recordIssues(enabledForFailure: true, tools: [sarif(pattern: 'bandit.sarif')], sourceCodeRetention: 'LAST_BUILD')
-  }
-  post {
-    always {
-      archiveArtifacts artifacts: 'flake8.out, bandit.sarif', allowEmptyArchive: true
+    environment {
+        AWS_DEFAULT_REGION = "us-east-1"
+        CONFIG_ENV = "staging"
+        STACK_NAME = "todo-list-aws-staging"
     }
-  }
-}
 
-    stage('Deploy (SAM to Staging)') {
-  steps {
-    withCredentials([
-      string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-      string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
-      string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
-    ]) {
-      sh '''
-        set -e
-        export AWS_DEFAULT_REGION=us-east-1
-
-    
-        aws sts get-caller-identity
-
-        python3 -m venv .venv || true
-        . .venv/bin/activate
-        python -m pip install -U pip
-        pip install aws-sam-cli awscli
-
-        sam build
-        sam validate
-
-        sam deploy --config-env staging --no-confirm-changeset --no-fail-on-empty-changeset
-      '''
-    }
-  }
-}
-
-    stage('Rest Test') {
-      steps {
-        withCredentials([[
-          $class: 'AmazonWebServicesCredentialsBinding',
-          credentialsId: 'aws-jenkins'
-        ]]) {
-          sh '''
-            set -e
-            export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-
-            . .venv/bin/activate
-            python -m pip install -U pip
-            pip install pytest requests awscli
-
-            # Obtener BaseUrlApi desde Outputs del stack (CloudFormation)
-            BASE_URL=$(aws cloudformation describe-stacks \
-              --stack-name ${STACK_NAME} \
-              --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
-              --output text)
-
-            echo "BASE_URL from CloudFormation: $BASE_URL"
-            test -n "$BASE_URL"
-
-            # Export para que pytest lo use (vas a tener que adaptar el test para leer esto)
-            export BASE_URL="$BASE_URL"
-
-            pytest -s test/integration/todoApiTest.py --junitxml=result-rest.xml
-          '''
+    stages {
+        stage('Get Code') {
+            steps {
+                checkout scm
+                sh 'git rev-parse --abbrev-ref HEAD'
+            }
         }
-      }
-      post {
+
+        stage('Static Test') {
+            steps {
+                sh '''
+                    set -e
+                    python3 -m venv .venv
+                    . .venv/bin/activate
+                    python -m pip install -U pip
+                    pip install flake8 "bandit[sarif]"
+                    
+                    python -m flake8 --format=pylint src > flake8.out || true
+                    test -f flake8.out || touch flake8.out
+                    python -m bandit --exit-zero -r src -f sarif -o bandit.sarif
+                '''
+                recordIssues(tools: [flake8(pattern: 'flake8.out')], sourceCodeRetention: 'LAST_BUILD')
+                recordIssues(enabledForFailure: true, tools: [sarif(pattern: 'bandit.sarif')], sourceCodeRetention: 'LAST_BUILD')
+            }
+        }
+
+        stage('Deploy (SAM to Staging)') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        . .venv/bin/activate
+                        pip install aws-sam-cli awscli
+                        sam build
+                        sam validate
+                        sam deploy --config-env staging --no-confirm-changeset --no-fail-on-empty-changeset
+                    '''
+                }
+            }
+        }
+
+        stage('Rest Test') {
+            steps {
+                // He cambiado a los 3 strings para asegurar consistencia con el deploy
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        . .venv/bin/activate
+                        pip install pytest requests awscli
+
+                        BASE_URL=$(aws cloudformation describe-stacks \
+                            --stack-name ${STACK_NAME} \
+                            --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+                            --output text)
+
+                        echo "BASE_URL from CloudFormation: $BASE_URL"
+                        
+                        if [ "$BASE_URL" == "None" ] || [ -z "$BASE_URL" ]; then
+                            echo "Error: BaseUrlApi no encontrada en los outputs del stack"
+                            exit 1
+                        fi
+
+                        export BASE_URL="$BASE_URL"
+                        pytest -s test/integration/todoApiTest.py --junitxml=result-rest.xml
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit testResults: 'result-rest.xml', allowEmptyResults: true
+                    archiveArtifacts artifacts: 'result-rest.xml', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Promote') {
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+                branch 'develop' // Solo promovemos si estamos en la rama develop
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-jenkins', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                    sh '''
+                        set -e
+                        git config user.email "jenkins@local"
+                        git config user.name "jenkins"
+
+                        # Limpiar y preparar ramas
+                        git fetch origin master
+                        git checkout master
+                        git reset --hard origin/master
+
+                        # Merge de develop a master
+                        git merge --no-ff origin/develop -m "Promote: merge develop into master [skip ci]"
+
+                        # Push usando el token para autenticación
+                        git remote set-url origin https://${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
+                        git push origin master
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
         always {
-          junit testResults: 'result-rest.xml', allowEmptyResults: true
-          archiveArtifacts artifacts: 'result-rest.xml', allowEmptyArchive: true
+            // Limpieza opcional o reportes finales
+            echo "Pipeline finalizado con estado: ${currentBuild.currentResult}"
         }
-      }
     }
-
-    stage('Promote') {
-      when {
-        expression { currentBuild.currentResult == 'SUCCESS' }
-      }
-      steps {
-        // merge develop -> master y push
-        withCredentials([usernamePassword(credentialsId: 'github-jenkins', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
-          sh '''
-            set -e
-            git config user.email "jenkins@local"
-            git config user.name "jenkins"
-
-            git fetch origin
-            git checkout master
-            git reset --hard origin/master
-
-            git merge --no-ff origin/develop -m "Promote: merge develop into master"
-
-            # push a master usando token
-            git remote set-url origin https://${GIT_USER}:${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
-            git push origin master
-          '''
-        }
-      }
-    }
-  }
-
-  post {
-    always {
-      archiveArtifacts artifacts: 'flake8.out, bandit.sarif', allowEmptyArchive: true
-    }
-  }
 }
