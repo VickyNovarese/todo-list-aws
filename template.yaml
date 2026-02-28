@@ -126,21 +126,21 @@ Outputs:
     Value: !Sub "https://${TodosApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}"
 
   CreateTodoApi:
-    Description: !Sub "Create TODO endpoint (${Stage})"
+    Description: "Create TODO endpoint (${Stage})"
     Value: !Sub "https://${TodosApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/todos"
 
   ListTodosApi:
-    Description: !Sub "List TODO endpoint (${Stage})"
+    Description: "List TODO endpoint (${Stage})"
     Value: !Sub "https://${TodosApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/todos"
 
   GetTodoApi:
-    Description: !Sub "Get TODO endpoint (${Stage})"
+    Description: "Get TODO endpoint (${Stage})"
     Value: !Sub "https://${TodosApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/todos/{id}"
 
   UpdateTodoApi:
-    Description: !Sub "Update TODO endpoint (${Stage})"
+    Description: "Update TODO endpoint (${Stage})"
     Value: !Sub "https://${TodosApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/todos/{id}"
 
   DeleteTodoApi:
-    Description: !Sub "Delete TODO endpoint (${Stage})"
+    Description: "Delete TODO endpoint (${Stage})"
     Value: !Sub "https://${TodosApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/todos/{id}"
