@@ -52,9 +52,9 @@ pipeline {
     stage('Deploy (SAM to Staging)') {
   steps {
     withCredentials([
-      string(credentialsId: 'aws_access_key_id', variable: 'AWS_ACCESS_KEY_ID'),
-      string(credentialsId: 'aws_secret_access_key', variable: 'AWS_SECRET_ACCESS_KEY'),
-      string(credentialsId: 'aws_session_token', variable: 'AWS_SESSION_TOKEN')
+      string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+      string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+      string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
     ]) {
       sh '''
         set -e
