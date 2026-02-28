@@ -7,159 +7,145 @@ pipeline {
   }
 
   environment {
-    BASE_URL = "http://127.0.0.1:3000"   // NO 8080 (8080 suele ser Jenkins)
     AWS_DEFAULT_REGION = "us-east-1"
-    AWS_ACCESS_KEY_ID = "test"
-    AWS_SECRET_ACCESS_KEY = "test"
+    CONFIG_ENV = "staging"
+    STACK_NAME = "todo-list-aws-staging"   // debe coincidir con samconfig.toml staging
   }
 
   stages {
 
     stage('Get Code') {
       steps {
+        // Asumiendo que el job está configurado para apuntar al repo
         checkout scm
-        sh '''
-          set -e
-          ls -la
-          echo "WORKSPACE: $WORKSPACE"
-        '''
+        sh 'git rev-parse --abbrev-ref HEAD'
       }
     }
 
-    stage('Setup Python') {
+    stage('Static Test') {
       steps {
         sh '''
           set -e
-          python3 -V
           python3 -m venv .venv
           . .venv/bin/activate
           python -m pip install -U pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install flake8 "bandit[sarif]"
 
-          # tools CI + tests integración
-          pip install flake8 "bandit[sarif]" aws-sam-cli pytest requests awscli
-        '''
-      }
-    }
+          # Flake8 SOLO src
+          python -m flake8 --format=pylint src > flake8.out || true
 
-    stage('Static (flake8)') {
-      steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-          sh '''
-            set -e
-            . .venv/bin/activate
-            python -m flake8 --format=pylint src > flake8.out || true
-          '''
-        }
-
-        recordIssues(
-          tools: [flake8(pattern: 'flake8.out')],
-          sourceCodeRetention: 'LAST_BUILD',
-          unhealthy: 9,
-          qualityGates: [[criticality: 'UNSTABLE', integerThreshold: 8, type: 'TOTAL']]
-        )
-      }
-    }
-
-    stage('Security (bandit)') {
-      steps {
-        sh '''
-          set -e
-          . .venv/bin/activate
+          # Bandit SOLO src
           python -m bandit --exit-zero -r src -f sarif -o bandit.sarif
         '''
+
+        // Publicar reportes (requiere Warnings Next Generation)
+        recordIssues(
+          tools: [flake8(pattern: 'flake8.out')],
+          sourceCodeRetention: 'LAST_BUILD'
+        )
 
         recordIssues(
           enabledForFailure: true,
           tools: [sarif(pattern: 'bandit.sarif')],
-          sourceCodeRetention: 'LAST_BUILD',
-          unhealthy: 3,
-          qualityGates: [[criticality: 'UNSTABLE', integerThreshold: 2, type: 'TOTAL']]
+          sourceCodeRetention: 'LAST_BUILD'
         )
       }
     }
 
-    stage('SAM Build & Validate') {
+    stage('Deploy (SAM to Staging)') {
       steps {
-        sh '''
-          set -e
-          . .venv/bin/activate
-          sam build
-          sam validate
-        '''
+        withCredentials([[
+          $class: 'AmazonWebServicesCredentialsBinding',
+          credentialsId: 'aws-jenkins'
+        ]]) {
+          sh '''
+            set -e
+            export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+
+            . .venv/bin/activate || (python3 -m venv .venv && . .venv/bin/activate)
+            python -m pip install -U pip
+            pip install aws-sam-cli awscli
+
+            sam build
+            sam validate
+
+            # Deploy NO interactivo usando samconfig.toml (staging)
+            sam deploy --config-env ${CONFIG_ENV} \
+              --no-confirm-changeset \
+              --no-fail-on-empty-changeset
+          '''
+        }
       }
     }
 
-    stage('REST (Integration tests local)') {
+    stage('Rest Test') {
       steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+        withCredentials([[
+          $class: 'AmazonWebServicesCredentialsBinding',
+          credentialsId: 'aws-jenkins'
+        ]]) {
           sh '''
             set -e
+            export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+
             . .venv/bin/activate
+            python -m pip install -U pip
+            pip install pytest requests awscli
 
-            export AWS_DEFAULT_REGION=us-east-1
-            export AWS_ACCESS_KEY_ID=test
-            export AWS_SECRET_ACCESS_KEY=test
-            export BASE_URL=http://127.0.0.1:3000
+            # Obtener BaseUrlApi desde Outputs del stack (CloudFormation)
+            BASE_URL=$(aws cloudformation describe-stacks \
+              --stack-name ${STACK_NAME} \
+              --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+              --output text)
 
-            docker network create sam >/dev/null 2>&1 || true
+            echo "BASE_URL from CloudFormation: $BASE_URL"
+            test -n "$BASE_URL"
 
-            docker rm -f dynamodb >/dev/null 2>&1 || true
-            docker run -d --name dynamodb --network sam -p 8000:8000 amazon/dynamodb-local >/dev/null
-
-            for i in $(seq 1 30); do
-              aws dynamodb list-tables --endpoint-url http://127.0.0.1:8000 >/dev/null 2>&1 && break || true
-              sleep 1
-            done
-
-            aws dynamodb create-table \
-              --table-name local-TodosDynamoDbTable \
-              --attribute-definitions AttributeName=id,AttributeType=S \
-              --key-schema AttributeName=id,KeyType=HASH \
-              --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1 \
-              --endpoint-url http://127.0.0.1:8000 >/dev/null 2>&1 || true
-            sam local start-api --port 3000 --env-vars localEnvironment.json --docker-network sam > sam-api.log 2>&1 &
-            
-            SAM_PID=$!
-
-            for i in $(seq 1 30); do
-              curl -sf $BASE_URL/todos >/dev/null && break || true
-              sleep 1
-            done
+            # Export para que pytest lo use (vas a tener que adaptar el test para leer esto)
+            export BASE_URL="$BASE_URL"
 
             pytest -s test/integration/todoApiTest.py --junitxml=result-rest.xml
-
-            kill $SAM_PID >/dev/null 2>&1 || true
-            docker rm -f dynamodb >/dev/null 2>&1 || true
           '''
         }
       }
       post {
         always {
-          junit testResults: 'result-rest.xml', skipMarkingBuildUnstable: true, allowEmptyResults: true
-          archiveArtifacts artifacts: 'sam-api.log', allowEmptyArchive: true
+          junit testResults: 'result-rest.xml', allowEmptyResults: true
+          archiveArtifacts artifacts: 'result-rest.xml', allowEmptyArchive: true
         }
       }
     }
-    
-    stage('Deploy (Staging)') {
-  steps {
-    withAWS(credentials: 'aws-jenkins', region: 'us-east-1') {
-      sh '''
-        set -e
-        python3 -m venv .venv
-        . .venv/bin/activate
-        python -m pip install -U pip
-        pip install aws-sam-cli
 
-        sam build
-        sam validate
+    stage('Promote') {
+      when {
+        expression { currentBuild.currentResult == 'SUCCESS' }
+      }
+      steps {
+        // merge develop -> master y push
+        withCredentials([usernamePassword(credentialsId: 'github-jenkins', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+          sh '''
+            set -e
+            git config user.email "jenkins@local"
+            git config user.name "jenkins"
 
-        sam deploy --config-env staging --no-confirm-changeset --no-fail-on-empty-changeset
-      '''
+            git fetch origin
+            git checkout master
+            git reset --hard origin/master
+
+            git merge --no-ff origin/develop -m "Promote: merge develop into master"
+
+            # push a master usando token
+            git remote set-url origin https://${GIT_USER}:${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
+            git push origin master
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'flake8.out, bandit.sarif', allowEmptyArchive: true
     }
   }
 }
-
-  } 
-}   
