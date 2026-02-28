@@ -100,7 +100,7 @@ pipeline {
                  // Solo promovemos si estamos en la rama develop
             }
             steps {
-                withCredentials([usernamePassword(credentialsId: 'github-jenkins', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                withCredentials([usernamePassword(credentialsId: 'unir', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     sh '''
                         set -e
                         git config user.email "jenkins@local"
