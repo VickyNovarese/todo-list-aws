@@ -53,30 +53,32 @@ pipeline {
     }
 
     stage('Deploy (SAM to Staging)') {
-      steps {
-        withCredentials([[
-          $class: 'AmazonWebServicesCredentialsBinding',
-          credentialsId: 'aws-jenkins'
-        ]]) {
-          sh '''
-            set -e
-            export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+  steps {
+    withCredentials([
+      string(credentialsId: 'aws_access_key_id', variable: 'AWS_ACCESS_KEY_ID'),
+      string(credentialsId: 'aws_secret_access_key', variable: 'AWS_SECRET_ACCESS_KEY'),
+      string(credentialsId: 'aws_session_token', variable: 'AWS_SESSION_TOKEN')
+    ]) {
+      sh '''
+        set -e
+        export AWS_DEFAULT_REGION=us-east-1
 
-            . .venv/bin/activate || (python3 -m venv .venv && . .venv/bin/activate)
-            python -m pip install -U pip
-            pip install aws-sam-cli awscli
+    
+        aws sts get-caller-identity
 
-            sam build
-            sam validate
+        python3 -m venv .venv || true
+        . .venv/bin/activate
+        python -m pip install -U pip
+        pip install aws-sam-cli awscli
 
-            # Deploy NO interactivo usando samconfig.toml (staging)
-            sam deploy --config-env ${CONFIG_ENV} \
-              --no-confirm-changeset \
-              --no-fail-on-empty-changeset
-          '''
-        }
-      }
+        sam build
+        sam validate
+
+        sam deploy --config-env staging --no-confirm-changeset --no-fail-on-empty-changeset
+      '''
     }
+  }
+}
 
     stage('Rest Test') {
       steps {
