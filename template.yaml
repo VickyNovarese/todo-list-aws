@@ -105,7 +105,6 @@ Resources:
             RestApiId: !Ref TodosApi
             Path: /todos/{id}
             Method: delete
-            
 
   TodosDynamoDbTable:
     Type: AWS::DynamoDB::Table
