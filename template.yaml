@@ -13,7 +13,7 @@ Parameters:
       - default
       - staging
       - production
-    Description: Enter staging or production. Default is default
+    Description: "Enter staging or production. Default is default"
 
 Globals:
   Function:
