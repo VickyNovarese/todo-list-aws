@@ -112,7 +112,7 @@ pipeline {
                         git reset --hard origin/master
 
                         # Merge de develop a master
-                        git merge --no-ff origin/develop -m "Promote: merge develop into master [skip ci]"
+                        git merge --no-ff origin/develop -m "Promote: merge develop into master"
 
                         # Push usando el token para autenticación
                         git remote set-url origin https://${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
