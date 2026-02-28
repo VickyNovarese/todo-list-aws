@@ -1,4 +1,5 @@
 pipeline {
+<<<<<<< HEAD
   agent any
   options { timestamps(); disableConcurrentBuilds() }
 
@@ -80,3 +81,88 @@ pipeline {
 }
 
 
+=======
+    agent any
+    
+    options {
+        timestamps()
+        // Este pipeline solo debería ejecutarse en master
+    }
+
+    environment {
+        AWS_DEFAULT_REGION = "us-east-1"
+        STACK_NAME = "todo-list-aws-production" // Diferente al de staging
+        CONFIG_ENV = "production"
+    }
+
+    stages {
+        stage('Get Code') {
+            steps {
+                // Descarga explícitamente la rama master
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/master']], 
+                    userRemoteConfigs: [[url: 'https://github.com/VickyNovarese/todo-list-aws.git']]
+                ])
+            }
+        }
+
+        stage('Deploy (Production)') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        
+                        python3 -m venv .venv || true
+                        . .venv/bin/activate
+                        pip install aws-sam-cli awscli
+                        
+                        sam build
+                        
+                        sam deploy --config-env ${CONFIG_ENV} --no-confirm-changeset --no-fail-on-empty-changeset
+                    '''
+                }
+            }
+        }
+
+        stage('Rest Test (Read-Only)') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        . .venv/bin/activate
+                        pip install pytest requests awscli
+
+                      
+                        BASE_URL=$(aws cloudformation describe-stacks \
+                            --stack-name ${STACK_NAME} \
+                            --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+                            --output text)
+
+                        export BASE_URL="$BASE_URL"
+                        echo "Testing Production API at: $BASE_URL"
+
+                       
+                        pytest -v -k "get or list" test/integration/todoApiTest.py --junitxml=result-prod-rest.xml
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit testResults: 'result-prod-rest.xml', allowEmptyResults: true
+                }
+            }
+        }
+    }
+}
+
+
+
+>>>>>>> 4d6a0c63452672631171fe647bc2b42ab59aec0c
