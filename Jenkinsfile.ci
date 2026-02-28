@@ -118,11 +118,8 @@ pipeline {
               --key-schema AttributeName=id,KeyType=HASH \
               --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1 \
               --endpoint-url http://127.0.0.1:8000 >/dev/null 2>&1 || true
-
-            sam local start-api \
-              --port 3000 \
-              --env-vars localEnvironment.json \
-              --docker-network sam > sam-api.log 2>&1 &
+            sam local start-api --port 3000 --env-vars localEnvironment.json --docker-network sam > sam-api.log 2>&1 &
+            
             SAM_PID=$!
 
             for i in $(seq 1 30); do
