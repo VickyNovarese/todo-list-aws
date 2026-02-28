@@ -92,7 +92,7 @@ pipeline {
       }
     }
 
-    stage('REST (Integration tests local)') {
+  stage('REST (Integration tests local)') {
   steps {
     catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
       sh '''
@@ -102,10 +102,13 @@ pipeline {
         export AWS_DEFAULT_REGION=us-east-1
         export AWS_ACCESS_KEY_ID=test
         export AWS_SECRET_ACCESS_KEY=test
-        export BASE_URL=http://127.0.0.1:8080
+
+        # IMPORTANT: NO usar 8080 porque suele ser Jenkins (Jetty) => 403
+        export BASE_URL=http://127.0.0.1:3000
 
         docker network create sam >/dev/null 2>&1 || true
 
+        # DynamoDB Local
         docker rm -f dynamodb >/dev/null 2>&1 || true
         docker run -d --name dynamodb --network sam -p 8000:8000 amazon/dynamodb-local >/dev/null
 
@@ -123,18 +126,24 @@ pipeline {
           --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1 \
           --endpoint-url http://127.0.0.1:8000 >/dev/null 2>&1 || true
 
-        sam local start-api --port 8080 --env-vars localEnvironment.json --docker-network sam > sam-api.log 2>&1 &
+        # Levantar SAM local API (en background) en puerto 3000
+        sam local start-api \
+          --port 3000 \
+          --env-vars localEnvironment.json \
+          --docker-network sam > sam-api.log 2>&1 &
         SAM_PID=$!
 
-        # Esperar API
+        # Esperar a que la API responda (curl -f falla si es 4xx/5xx)
         for i in $(seq 1 30); do
-          curl -s $BASE_URL/todos >/dev/null && break || true
+          curl -sf $BASE_URL/todos >/dev/null && break || true
           sleep 1
         done
 
+        # Ejecutar tests
         pytest -s test/integration/todoApiTest.py --junitxml=result-rest.xml
 
-        kill $SAM_PID || true
+        # Cleanup
+        kill $SAM_PID >/dev/null 2>&1 || true
         docker rm -f dynamodb >/dev/null 2>&1 || true
       '''
     }
@@ -145,6 +154,7 @@ pipeline {
       archiveArtifacts artifacts: 'sam-api.log', allowEmptyArchive: true
     }
   }
+}
  }
 }
 }
