@@ -1,83 +1,83 @@
 pipeline {
-
-  agent any
-  options { timestamps(); disableConcurrentBuilds() }
-
-  parameters {
-    choice(name: 'DEPLOY_STAGE', choices: ['default','staging','production'], description: 'SAM parameter Stage')
-    string(name: 'STACK_NAME', defaultValue: 'todo-list-aws', description: 'CloudFormation/SAM stack name')
-    string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS Region')
-  }
-
-  environment {
-    AWS_DEFAULT_REGION = "${params.AWS_REGION}"
-  }
-
-  stages {
-    stage('Checkout') { steps { checkout scm } }
-
-    stage('Only master') {
-      when { not { branch 'master' } }
-      steps {
-        echo "CD runs only on master. Skipping..."
-        script { currentBuild.result = 'NOT_BUILT' }
-      }
+    agent any
+    
+    options {
+        timestamps()
+        // Este pipeline solo debería ejecutarse en master
     }
 
-    stage('SAM Build') {
-      when { branch 'master' }
-      steps {
-        sh '''
-          set -e
-          sam --version
-          aws --version
-          sam build
-        '''
-      }
+    environment {
+        AWS_DEFAULT_REGION = "us-east-1"
+        STACK_NAME = "todo-list-aws-production" // Diferente al de staging
+        CONFIG_ENV = "production"
     }
 
-    stage('SAM Deploy') {
-      when { branch 'master' }
-      steps {
-        sh '''
-          set -e
-          sam deploy \
-            --stack-name "${STACK_NAME}" \
-            --resolve-s3 \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --parameter-overrides Stage="${DEPLOY_STAGE}" \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset
-        '''
-      }
+    stages {
+        stage('Get Code') {
+            steps {
+                // Descarga explícitamente la rama master
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/master']], 
+                    userRemoteConfigs: [[url: 'https://github.com/VickyNovarese/todo-list-aws.git']]
+                ])
+            }
+        }
+
+        stage('Deploy (Production)') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        
+                        python3 -m venv .venv || true
+                        . .venv/bin/activate
+                        pip install aws-sam-cli awscli
+                        
+                        sam build
+                        
+                        sam deploy --config-env ${CONFIG_ENV} --no-confirm-changeset --no-fail-on-empty-changeset
+                    '''
+                }
+            }
+        }
+
+        stage('Rest Test (Read-Only)') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        . .venv/bin/activate
+                        pip install pytest requests awscli
+
+                      
+                        BASE_URL=$(aws cloudformation describe-stacks \
+                            --stack-name ${STACK_NAME} \
+                            --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+                            --output text)
+
+                        export BASE_URL="$BASE_URL"
+                        echo "Testing Production API at: $BASE_URL"
+
+                       
+                        pytest -v -k "get or list" test/integration/todoApiTest.py --junitxml=result-prod-rest.xml
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit testResults: 'result-prod-rest.xml', allowEmptyResults: true
+                }
+            }
+        }
     }
-
-    stage('Smoke Tests (Deployed API)') {
-      when { branch 'master' }
-      steps {
-        sh '''
-          set -e
-
-          BASE_URL=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
-            --output text)
-
-          if [ -z "$BASE_URL" ] || [ "$BASE_URL" = "None" ]; then
-            echo "ERROR: BaseUrlApi output not found in stack outputs."
-            exit 1
-          fi
-
-          echo "Base URL: $BASE_URL"
-
-          # basic health: list todos
-          CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/todos" || true)
-          echo "GET /todos => $CODE"
-          test "$CODE" = "200"
-        '''
-      }
-    }
-  }
 }
 
 

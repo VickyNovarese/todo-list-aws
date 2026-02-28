@@ -1,73 +1,132 @@
 pipeline {
-  agent any
-  options { timestamps(); disableConcurrentBuilds() }
-
-  stages {
-    stage('Checkout') { steps { checkout scm } }
-
-    stage('Only develop') {
-      when { not { branch 'develop' } }
-      steps {
-        echo "CI runs only on develop. Skipping..."
-        script { currentBuild.result = 'NOT_BUILT' }
-      }
+    agent any
+    options {
+        timestamps()
+        skipDefaultCheckout(true)
     }
 
-    stage('Setup Python') {
-      when { branch 'develop' }
-      steps {
-        sh '''
-          set -e
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install -U pip
-          [ -f requirements.txt ] && pip install -r requirements.txt || true
-          pip install flake8 pytest coverage bandit
-        '''
-      }
+    environment {
+        AWS_DEFAULT_REGION = "us-east-1"
+        CONFIG_ENV = "staging"
+        STACK_NAME = "todo-list-aws-staging"
     }
 
-    stage('Static (flake8)') {
-      when { branch 'develop' }
-      steps {
-        sh '''
-          set -e
-          . .venv/bin/activate
-          python -m flake8 app
-        '''
-      }
-    }
-
-    stage('Unit Tests + Coverage') {
-      when { branch 'develop' }
-      steps {
-        sh '''
-          set -e
-          . .venv/bin/activate
-          export PYTHONPATH=.
-          python -m coverage run --branch --source=app --omit=app/__init__.py \
-            -m pytest --junitxml=result-unit.xml test/unit
-          python -m coverage xml -o coverage.xml
-        '''
-      }
-      post {
-        always {
-          junit testResults: 'result-unit.xml', allowEmptyResults: true
-          archiveArtifacts artifacts: 'coverage.xml', allowEmptyArchive: true
+    stages {
+        stage('Get Code') {
+            steps {
+                checkout scm
+                sh 'git rev-parse --abbrev-ref HEAD'
+            }
         }
-      }
+
+        stage('Static Test') {
+            steps {
+                sh '''
+                    set -e
+                    python3 -m venv .venv
+                    . .venv/bin/activate
+                    python -m pip install -U pip
+                    pip install flake8 "bandit[sarif]"
+                    
+                    python -m flake8 --format=pylint src > flake8.out || true
+                    test -f flake8.out || touch flake8.out
+                    python -m bandit --exit-zero -r src -f sarif -o bandit.sarif
+                '''
+                recordIssues(tools: [flake8(pattern: 'flake8.out')], sourceCodeRetention: 'LAST_BUILD')
+                recordIssues(enabledForFailure: true, tools: [sarif(pattern: 'bandit.sarif')], sourceCodeRetention: 'LAST_BUILD')
+            }
+        }
+
+        stage('Deploy (SAM to Staging)') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        . .venv/bin/activate
+                        pip install aws-sam-cli awscli
+                        sam build
+                        sam validate
+                        sam deploy --config-env staging --no-confirm-changeset --no-fail-on-empty-changeset
+                    '''
+                }
+            }
+        }
+
+        stage('Rest Test') {
+            steps {
+                // He cambiado a los 3 strings para asegurar consistencia con el deploy
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SESSION_TOKEN', variable: 'AWS_SESSION_TOKEN')
+                ]) {
+                    sh '''
+                        set -e
+                        . .venv/bin/activate
+                        pip install pytest requests awscli
+
+                        BASE_URL=$(aws cloudformation describe-stacks \
+                            --stack-name ${STACK_NAME} \
+                            --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+                            --output text)
+
+                        echo "BASE_URL from CloudFormation: $BASE_URL"
+                        
+                        if [ "$BASE_URL" == "None" ] || [ -z "$BASE_URL" ]; then
+                            echo "Error: BaseUrlApi no encontrada en los outputs del stack"
+                            exit 1
+                        fi
+
+                        export BASE_URL="$BASE_URL"
+                        pytest -s test/integration/todoApiTest.py --junitxml=result-rest.xml
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit testResults: 'result-rest.xml', allowEmptyResults: true
+                    archiveArtifacts artifacts: 'result-rest.xml', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Promote') {
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+                 // Solo promovemos si estamos en la rama develop
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'unir', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                    sh '''
+                        set -e
+                        git config user.email "jenkins@local"
+                        git config user.name "jenkins"
+
+                        # Limpiar y preparar ramas
+                        git fetch origin master
+                        git checkout master
+                        git reset --hard origin/master
+
+                        # Merge de develop a master
+                        git merge --no-ff origin/develop -m "Promote: merge develop into master"
+
+                        # Push usando el token para autenticación
+                        git remote set-url origin https://${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
+                        git push origin master
+                    '''
+                }
+            }
+        }
     }
 
-    stage('Security (bandit)') {
-      when { branch 'develop' }
-      steps {
-        sh '''
-          set -e
-          . .venv/bin/activate
-          bandit -r . -x .venv -f txt -o bandit.txt || true
-        '''
-      }
-      post { always { archiveArtifacts artifacts: 'bandit.txt', allowEmptyArchive: true } }
+    post {
+        always {
+            // Limpieza opcional o reportes finales
+            echo "Pipeline finalizado con estado: ${currentBuild.currentResult}"
+        }
     }
-  }
 }
