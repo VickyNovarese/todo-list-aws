@@ -94,34 +94,41 @@ pipeline {
             }
         }
 
-        stage('Promote') {
-            when {
-                expression { currentBuild.currentResult == 'SUCCESS' }
+       stage('Promote') {
+    when {
+        expression { currentBuild.currentResult == 'SUCCESS' }
+        branch 'develop' 
+    }
+    steps {
+        withCredentials([usernamePassword(credentialsId: 'github-jenkins', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+                set -e
                 
-            }
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'github-jenkins', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
-                    sh '''
-                        set -e
-                        git config user.email "jenkins@local"
-                        git config user.name "jenkins"
+                # 1. Configurar identidad
+                git config user.email "jenkins@local"
+                git config user.name "jenkins"
 
-                        # Limpiar y preparar ramas
-                        git fetch origin master
-                        git checkout master
-                        git reset --hard origin/master
+                # 2. Configurar el remote con USUARIO y TOKEN (Evita errores de permisos 403)
+                git remote set-url origin "https://${GIT_USER}:${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git"
 
-                        # Merge de develop a master
-                        git merge --no-ff origin/develop -m "Promote: merge develop into master"
+                # 3. Traer toda la información del remoto (Evita errores de "rama no encontrada")
+                git fetch --all
 
-                        # Push usando el token para autenticación
-                        git remote set-url origin https://${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
-                        git push origin master
-                    '''
-                }
-            }
+                # 4. Forzar la creación/actualización de master local basada en el remoto (Evita el Detached HEAD)
+                git checkout -B master origin/master
+
+                # 5. Realizar el merge
+                git merge --no-ff origin/develop -m "Promote: merge develop into master"
+
+                # 6. Subir los cambios
+                git push origin master
+                
+                # 7. Limpiar la URL por seguridad para no dejar el token expuesto en los logs internos
+                git remote set-url origin "https://github.com/VickyNovarese/todo-list-aws.git"
+            '''
         }
     }
+}
 
     post {
         always {
