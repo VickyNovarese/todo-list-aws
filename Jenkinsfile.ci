@@ -97,7 +97,7 @@ pipeline {
         stage('Promote') {
             when {
                 expression { currentBuild.currentResult == 'SUCCESS' }
-                branch 'develop' // Solo promovemos si estamos en la rama develop
+                
             }
             steps {
                 withCredentials([usernamePassword(credentialsId: 'github-jenkins', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
