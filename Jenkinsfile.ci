@@ -23,34 +23,31 @@ pipeline {
     }
 
     stage('Static Test') {
-      steps {
-        sh '''
-          set -e
-          python3 -m venv .venv
-          . .venv/bin/activate
-          python -m pip install -U pip
-          pip install flake8 "bandit[sarif]"
+  steps {
+    sh '''
+      set -e
+      python3 -m venv .venv
+      . .venv/bin/activate
+      python -m pip install -U pip
+      pip install flake8 "bandit[sarif]"
 
-          # Flake8 SOLO src
-          python -m flake8 --format=pylint src > flake8.out || true
+      # Flake8 SOLO src (no debe fallar el stage)
+      python -m flake8 --format=pylint src > flake8.out || true
+      test -f flake8.out || touch flake8.out
 
-          # Bandit SOLO src
-          python -m bandit --exit-zero -r src -f sarif -o bandit.sarif
-        '''
+      # Bandit SOLO src
+      python -m bandit --exit-zero -r src -f sarif -o bandit.sarif
+    '''
 
-        // Publicar reportes (requiere Warnings Next Generation)
-        recordIssues(
-          tools: [flake8(pattern: 'flake8.out')],
-          sourceCodeRetention: 'LAST_BUILD'
-        )
-
-        recordIssues(
-          enabledForFailure: true,
-          tools: [sarif(pattern: 'bandit.sarif')],
-          sourceCodeRetention: 'LAST_BUILD'
-        )
-      }
+    recordIssues(tools: [flake8(pattern: 'flake8.out')], sourceCodeRetention: 'LAST_BUILD')
+    recordIssues(enabledForFailure: true, tools: [sarif(pattern: 'bandit.sarif')], sourceCodeRetention: 'LAST_BUILD')
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'flake8.out, bandit.sarif', allowEmptyArchive: true
     }
+  }
+}
 
     stage('Deploy (SAM to Staging)') {
   steps {
