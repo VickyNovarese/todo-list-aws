@@ -141,6 +141,25 @@ pipeline {
         }
       }
     }
+    
+    stage('Deploy (Staging)') {
+  steps {
+    withAWS(credentials: 'aws-jenkins', region: 'us-east-1') {
+      sh '''
+        set -e
+        python3 -m venv .venv
+        . .venv/bin/activate
+        python -m pip install -U pip
+        pip install aws-sam-cli
+
+        sam build
+        sam validate
+
+        sam deploy --config-env staging --no-confirm-changeset --no-fail-on-empty-changeset
+      '''
+    }
+  }
+}
 
   } 
 }   
