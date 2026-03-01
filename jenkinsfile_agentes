@@ -16,18 +16,20 @@ pipeline {
         stage('Get Code') {
             agent any
             steps {
+                
+                sh 'echo "--- Identidad en Get Code ---"; whoami; hostname'
                 checkout scm
             }
         }
 
         stage('Static Test') {
-            agent { label 'static-analysis' } // Recuerda poner esta etiqueta en el nodo
+            agent { label 'static-analysis' } 
             steps {
-                sh 'echo "Ejecutando Get Code en:"; whoami; hostname'
+                sh 'echo "--- Identidad en Static Test ---"; whoami; hostname'
                 checkout scm
                 sh '''
                     set -e
-                    python3 -m venv .venv
+                    python3 -m venv .venv || true
                     . .venv/bin/activate
                     pip install flake8 "bandit[sarif]"
                     python -m flake8 --format=pylint src > flake8.out || true
@@ -41,6 +43,7 @@ pipeline {
         stage('Deploy (SAM to Staging)') {
             agent any 
             steps {
+                sh 'echo "--- Identidad en Deploy ---"; whoami; hostname'
                 checkout scm
                 withCredentials([
                     string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
@@ -49,7 +52,7 @@ pipeline {
                 ]) {
                     sh '''
                         set -e
-                        python3 -m venv .venv
+                        python3 -m venv .venv || true
                         . .venv/bin/activate
                         pip install aws-sam-cli awscli
                         sam build
@@ -60,9 +63,9 @@ pipeline {
         }
 
         stage('Rest Test') {
-            agent { label 'api-tests' } // Recuerda poner esta etiqueta en el nodo
+            agent { label 'api-tests' } 
             steps {
-                sh 'echo "Ejecutando Get Code en:"; whoami; hostname'
+                sh 'echo "--- Identidad en Rest Test ---"; whoami; hostname'
                 checkout scm
                 withCredentials([
                     string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
@@ -71,11 +74,10 @@ pipeline {
                 ]) {
                     sh '''
                         set -e
-                        python3 -m venv .venv
+                        python3 -m venv .venv || true
                         . .venv/bin/activate
                         pip install pytest requests awscli
 
-                        # El agente consulta la URL directamente a AWS
                         BASE_URL=$(aws cloudformation describe-stacks \
                             --stack-name ${STACK_NAME} \
                             --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
@@ -104,6 +106,7 @@ pipeline {
             agent any
             when { expression { currentBuild.currentResult == 'SUCCESS' } }
             steps {
+                sh 'echo "--- Identidad en Promote ---"; whoami; hostname'
                 checkout scm
                 withCredentials([usernamePassword(credentialsId: 'unir', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     sh '''
@@ -111,7 +114,9 @@ pipeline {
                         git config user.name "jenkins"
                         git fetch origin master
                         git checkout master
-                        git merge --no-ff origin/develop -m "Promote: CI to CD"
+                        git reset --hard origin/master
+                        # Merge forzado para evitar conflictos de renombramiento de Jenkinsfile
+                        git merge -X theirs --no-ff origin/develop -m "Promote: CI to CD"
                         git remote set-url origin https://${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
                         git push origin master
                     '''
@@ -119,4 +124,4 @@ pipeline {
             }
         }
     }
-}
+} 
