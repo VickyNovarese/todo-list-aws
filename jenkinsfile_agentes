@@ -59,6 +59,7 @@ pipeline {
             }
         }
 
+<<<<<<< HEAD
         
         stage('Promote to Master') {
             agent any
@@ -70,10 +71,29 @@ pipeline {
                         git config user.name jenkins
                         git checkout master
                         git merge --no-ff origin/develop -X theirs -m "Promote: merge develop into master"
+=======
+        stage('Promote') {
+            agent any
+            when { expression { currentBuild.currentResult == 'SUCCESS' } }
+            steps {
+                checkout scm
+                withCredentials([usernamePassword(credentialsId: 'unir', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                    sh '''
+                        git config user.email "jenkins@local"
+                        git config user.name "jenkins"
+                        git fetch origin master
+                        git checkout master
+                        git merge --no-ff origin/develop -m "Promote: CI to CD"
+                        git remote set-url origin https://${GIT_TOKEN}@github.com/VickyNovarese/todo-list-aws.git
+>>>>>>> origin/develop
                         git push origin master
                     '''
                 }
             }
         }
     }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> origin/develop
