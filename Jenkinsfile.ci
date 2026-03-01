@@ -11,13 +11,30 @@ pipeline {
         STACK_NAME = "todo-list-aws-staging"
     }
 
-    stages {
-        stage('Get Code') {
-            steps {
-                checkout scm
-                sh 'git rev-parse --abbrev-ref HEAD'
-            }
+        stages {
+      stage('Get Code') {
+        steps {
+          checkout scm
+          sh 'git rev-parse --abbrev-ref HEAD'
+    
+          script {
+            // develop => staging | master => production
+            def cfgBranch = (env.BRANCH_NAME == 'master') ? 'production' : 'staging'
+    
+            sh """
+              echo "Downloading samconfig.toml from branch: ${cfgBranch}"
+              curl -L -o samconfig.toml \
+                https://raw.githubusercontent.com/<TU_ORG_O_USER>/todo-list-aws-config/${cfgBranch}/samconfig.toml
+    
+              echo "Downloaded file:"
+              ls -la samconfig.toml
+              echo "---- samconfig.toml ----"
+              head -n 50 samconfig.toml
+            """
+          }
         }
+      }
+    }
 
         stage('Static Test') {
             steps {
