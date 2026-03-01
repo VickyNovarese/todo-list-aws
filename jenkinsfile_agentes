@@ -23,6 +23,7 @@ pipeline {
         stage('Static Test') {
             agent { label 'static-analysis' } // Recuerda poner esta etiqueta en el nodo
             steps {
+                sh 'echo "Ejecutando Get Code en:"; whoami; hostname'
                 checkout scm
                 sh '''
                     set -e
@@ -61,6 +62,7 @@ pipeline {
         stage('Rest Test') {
             agent { label 'api-tests' } // Recuerda poner esta etiqueta en el nodo
             steps {
+                sh 'echo "Ejecutando Get Code en:"; whoami; hostname'
                 checkout scm
                 withCredentials([
                     string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
