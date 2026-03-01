@@ -13,10 +13,10 @@ pipeline {
   }
 
   environment {
-    // Python venv
+    
     VENV = ".venv"
 
-    // Local test services
+   
     FLASK_APP = "app/api.py"
     FLASK_HOST = "127.0.0.1"
     FLASK_PORT = "5000"
@@ -31,7 +31,6 @@ pipeline {
 
     stage('Checkout') {
       steps {
-        // ✅ Best for Multibranch Pipeline (or Pipeline with SCM configured)
         checkout scm
 
         sh '''
@@ -47,11 +46,7 @@ pipeline {
       }
     }
 
-    // -------------------------
-    // Gate rules:
-    // - Deploy only on master
-    // - Must come from develop (only enforce strongly when it's a PR build)
-    // -------------------------
+    
     stage('Gate: allow deploy only for master merges from develop') {
       when { branch 'master' }
       steps {
@@ -59,7 +54,7 @@ pipeline {
           def src = env.CHANGE_BRANCH ?: ''
           def tgt = env.CHANGE_TARGET ?: ''
 
-          // If this is a PR context in multibranch, enforce strictly
+          
           if (env.CHANGE_ID) {
             echo "PR build detected: #${env.CHANGE_ID} source=${src} target=${tgt}"
             if (tgt != 'master') {
@@ -69,15 +64,14 @@ pipeline {
               error("This pipeline only deploys when PR source is develop. Got source=${src}")
             }
           } else {
-            // Not a PR build (likely direct push/merge). Best-effort check.
+            
             echo "Not a PR context. Best-effort validation for 'from develop'."
 
             def parents = sh(script: "git rev-list --parents -n 1 HEAD | wc -w", returnStdout: true).trim()
             def isMergeCommit = (parents as Integer) >= 3
             if (!isMergeCommit) {
               echo "HEAD is not a merge commit (possible squash/rebase). Cannot reliably validate source branch."
-              // If you want to BLOCK squash merges into master, uncomment:
-              // error("Merge into master must be a merge commit from develop (no squash/rebase).")
+             
             } else {
               def mergeMsg = sh(script: "git log -1 --pretty=%B", returnStdout: true).trim().toLowerCase()
               echo "Merge message: ${mergeMsg}"
