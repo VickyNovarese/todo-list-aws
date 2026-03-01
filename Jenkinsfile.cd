@@ -54,7 +54,7 @@ pipeline {
                         
                         sam build
                         
-                        sam deploy --config-env ${CONFIG_ENV} --no-confirm-changeset --no-fail-on-empty-changeset
+                       sam deploy --config-file samconfig.toml --config-env ${CONFIG_ENV} --no-confirm-changeset --no-fail-on-empty-changeset
                     '''
                 }
             }
