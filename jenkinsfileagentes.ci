@@ -1,0 +1,79 @@
+pipeline {
+    agent none
+
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        APP_NAME = 'todo-list-aws'
+    }
+
+    stages {
+        
+        stage('Static Analysis') {
+            agent { label 'python-agent' } 
+            steps {
+                sh '''
+                    pip install flake8 bandit
+                    flake8 src/
+                    bandit -r src/
+                '''
+            }
+        }
+
+        
+        stage('Deploy Staging') {
+            agent any 
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+                    sh '''
+                        sam build
+                        sam deploy --config-env staging --no-confirm-changeset --no-fail-on-empty-changeset
+                        
+                        # SOLUCIÓN: Extraer la URL y guardarla en un archivo
+                        aws cloudformation describe-stacks \
+                            --stack-name ${APP_NAME}-staging \
+                            --query 'Stacks[0].Outputs[?OutputKey==`ServiceEndpoint`].OutputValue' \
+                            --output text > api_url.txt
+                    '''
+                }
+                
+                archiveArtifacts artifacts: 'api_url.txt', onlyIfSuccessful: true
+            }
+        }
+
+        
+        stage('API Rest Tests') {
+            agent { label 'test-agent' } 
+            steps {
+                
+                copyArtifacts projectName: env.JOB_NAME, selector: lastSuccessful(), filter: 'api_url.txt'
+                
+                script {
+                    def API_URL = readFile('api_url.txt').trim()
+                    echo "Probando la API en: ${API_URL}"
+                    
+                    sh """
+                        
+                        curl -s -o /dev/null -w "%{http_code}" ${API_URL}/todos | grep "200"
+                    """
+                }
+            }
+        }
+
+        
+        stage('Promote to Master') {
+            agent any
+            when { branch 'develop' }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-jenkins', passwordVariable: 'GIT_TOKEN', usernameVariable: 'GIT_USER')]) {
+                    sh '''
+                        git config user.email jenkins@local
+                        git config user.name jenkins
+                        git checkout master
+                        git merge --no-ff origin/develop -X theirs -m "Promote: merge develop into master"
+                        git push origin master
+                    '''
+                }
+            }
+        }
+    }
+}
